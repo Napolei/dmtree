@@ -1,13 +1,17 @@
 import abc
+import itertools
 import math
 from numbers import Number
-from typing import Optional, Set, Dict
+from typing import Optional, Set, Dict, List
 
 
 class RangeItem:
     def __init__(self, obj, r):
         self.obj = obj
         self.r = r
+
+    def __repr__(self):
+        return f'RangeItem[value={self.obj}, range={self.r}]'
 
 
 class MtreeElement:
@@ -50,9 +54,12 @@ class Node:
     def values(self) -> Set[MtreeElement]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
+    def find_in_radius(self, value, radius) -> List[RangeItem]:
+        raise NotImplementedError()
+
 
 class NonLeafNode(Node):
-
     def __init__(self, mtree_pointer):
         super().__init__(mtree_pointer)
         self.routing_objects: Set[RoutingObject] = set()
@@ -143,6 +150,9 @@ class NonLeafNode(Node):
     def values(self) -> Set[MtreeElement]:
         return set().union(*([x.values() for x in self.routing_objects]))
 
+    def find_in_radius(self, value, radius) -> List[RangeItem]:
+        return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
+
     def __repr__(self):
         return f'NonLeafNode[routing_objects={self.routing_objects}]'
 
@@ -219,6 +229,10 @@ class LeafNode(Node):
     def values(self) -> Set[MtreeElement]:
         return set([MtreeElement(x.identifier, x.value) for x in self.mtree_objects.values()])
 
+    def find_in_radius(self, value, radius) -> List[RangeItem]:
+        ranges = [RangeItem(x.value, self.distance_measure(x.value, value)) for x in self.mtree_objects.values()]
+        return [x for x in ranges if x.r <= radius]
+
     def __repr__(self):
         return f'LeafNode[values={list(self.mtree_objects.values())}]'
 
@@ -256,6 +270,19 @@ class RoutingObject:
         else:
             return {MtreeElement(self.routing_value.identifier, self.routing_value.value)}
 
+    def find_in_radius(self, value, radius) -> List[RangeItem]:
+        distance_to_routing_object_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
+        lower_bound = self.routing_value.value - self.covering_radius
+        upper_bound = self.routing_value.value + self.covering_radius
+
+        if distance_to_routing_object_value > radius + self.covering_radius:  # no overlap
+            return []
+        children_in_radius = self.covering_tree.find_in_radius(value, radius)
+        if distance_to_routing_object_value <= radius:
+            return list(children_in_radius) + [RangeItem(self.routing_value.value, distance_to_routing_object_value)]
+        else:
+            return children_in_radius
+
     def __repr__(self):
         return f'RoutingObject[value={self.routing_value}, covering_tree={self.covering_tree}]'
 
@@ -284,3 +311,8 @@ class MTree:
             return set()
         else:
             return self._root_node.values()
+
+    def find_in_radius(self, value, radius) -> List[RangeItem]:
+        if not self._root_node:
+            return []
+        return sorted(self._root_node.find_in_radius(value, radius), key=lambda x: x.r)
