@@ -1,8 +1,10 @@
 import abc
+import heapq
 import itertools
 import math
 from numbers import Number
-from typing import Optional, Set, Dict, List
+from random import randrange
+from typing import Optional, Set, Dict, List, Iterator
 
 
 class RangeItem:
@@ -58,6 +60,10 @@ class Node:
     def find_in_radius(self, value, radius) -> List[RangeItem]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
+    def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        raise NotImplementedError()
+
 
 class NonLeafNode(Node):
     def __init__(self, mtree_pointer):
@@ -98,6 +104,7 @@ class NonLeafNode(Node):
         # assert len(candidates) >= 2
         fullest_routing_object = candidates[0]
         fullest_leafnode = fullest_routing_object.covering_tree
+        assert fullest_leafnode is not None
         assert isinstance(fullest_leafnode, LeafNode)
         fullest_leafnode: LeafNode = fullest_leafnode
 
@@ -111,6 +118,7 @@ class NonLeafNode(Node):
 
         fullest_routing_object_2 = candidates[1]
         subtree_2: LeafNode = fullest_routing_object_2.covering_tree
+        assert subtree_2 is not None
         assert isinstance(subtree_2, LeafNode)
         subtree_2 = subtree_2
         for mtree_obj in subtree_2.mtree_objects.values():
@@ -150,8 +158,16 @@ class NonLeafNode(Node):
     def values(self) -> Set[MtreeElement]:
         return set().union(*([x.values() for x in self.routing_objects]))
 
-    def find_in_radius(self, value, radius) -> List[RangeItem]:
+    def find_in_radius(self, value, radius) -> Iterator[RangeItem]:
         return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
+
+    def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        # add routing objects to heap
+        for ro in self.routing_objects:
+            distance_to_value = self.distance_measure(value, ro.routing_value.value)
+            lower_bound = max([0, distance_to_value - ro.covering_radius])
+            heapq.heappush(heap, (lower_bound, randrange(100000000000), ro))
+        return heap, current_elements
 
     def __repr__(self):
         return f'NonLeafNode[routing_objects={self.routing_objects}]'
@@ -198,8 +214,8 @@ class LeafNode(Node):
             self.mtree_objects.pop(
                 element.identifier)  # remove objects from current node if they got assigned to the new leaf
 
-        new_routing_object_dist_to_parent = self.mtree_pointer.distance_measure(new_routing_object_value.value,
-                                                                                self.parent_routing_object.routing_value.value)
+        # new_routing_object_dist_to_parent = self.mtree_pointer.distance_measure(new_routing_object_value.value,
+        #                                                                         self.parent_routing_object.routing_value.value)
 
         new_routing_object = RoutingObject(new_routing_object_value, new_routing_object_radius, new_leaf_node,
                                            self.parent_node, self.mtree_pointer)
@@ -232,6 +248,12 @@ class LeafNode(Node):
     def find_in_radius(self, value, radius) -> List[RangeItem]:
         ranges = [RangeItem(x.value, self.distance_measure(x.value, value)) for x in self.mtree_objects.values()]
         return [x for x in ranges if x.r <= radius]
+
+    def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        for element in self.mtree_objects.values():
+            distance = self.mtree_pointer.distance_measure(element.value, value)
+            heapq.heappush(current_elements, (distance, randrange(100000000000), RangeItem(element, distance)))
+        return heap, current_elements
 
     def __repr__(self):
         return f'LeafNode[values={list(self.mtree_objects.values())}]'
@@ -283,6 +305,15 @@ class RoutingObject:
         else:
             return children_in_radius
 
+    def knn(self, value, _, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        distance_to_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
+        lower_bound = max([0, distance_to_value - self.covering_radius])
+        heapq.heappush(current_elements,
+                       (distance_to_value, randrange(100000000000), RangeItem(self.routing_value, distance_to_value)))
+        if self.covering_tree is not None:
+            heapq.heappush(heap, (lower_bound, randrange(100000000000), self.covering_tree))
+        return heap, current_elements
+
     def __repr__(self):
         return f'RoutingObject[value={self.routing_value}, covering_tree={self.covering_tree}]'
 
@@ -316,3 +347,46 @@ class MTree:
         if not self._root_node:
             return []
         return sorted(self._root_node.find_in_radius(value, radius), key=lambda x: x.r)
+
+    @staticmethod
+    def _continue_knn_search(k: int, heap: heapq, current_elements: heapq):
+        if len(heap) == 0:
+            return False
+        if len(current_elements) < k:
+            return True
+        lower_bound, _, highest_distance_node = heapq.nsmallest(1, heap)[0]
+        distance_element, _, highest_distance_element = heapq.nlargest(k, current_elements)[-1]
+        if distance_element >= lower_bound:
+            return True
+        else:
+            return False
+
+    def knn(self, value, k, truncate=True) -> List[RangeItem]:
+        heap: heapq = []
+        current_elements = []
+        if not self._root_node:
+            return current_elements
+
+        heap, current_elements = self._root_node.knn(value, math.inf, k, heap, current_elements)
+        while self._continue_knn_search(k, heap, current_elements):
+            _, _, next_candidate = heapq.heappop(heap)
+            heap, current_elements = next_candidate.knn(value, math.inf, k, heap, current_elements)
+
+        return_elements = []
+        max_distance = 0
+        for index in range(len(current_elements)):
+            element = heapq.heappop(current_elements)
+            if index == k - 1:
+                max_distance = element[0]
+            if index <= k - 1:
+                return_elements.append(element[2])
+            if index > k - 1:
+                if truncate:
+                    return return_elements
+                else:
+                    if element[0] == max_distance:
+                        return_elements.append(element[2])
+                    else:
+                        return return_elements
+        return return_elements
+
