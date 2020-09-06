@@ -3,7 +3,6 @@ import heapq
 import itertools
 import math
 from numbers import Number
-from random import randrange
 from typing import Optional, Set, Dict, List, Iterator
 
 
@@ -21,6 +20,8 @@ class MtreeElement:
         self.identifier = identifier
         self.value = value
 
+    def __repr__(self):
+        return f'MtreeElement[id={self.identifier}, value={self.value}]'
 
 class MTreeObject:
     # objects that belong to leaf nodes
@@ -32,6 +33,18 @@ class MTreeObject:
 
     def __repr__(self):
         return f'{self.value}'
+
+
+class HeapObject:
+    next_id = 0
+
+    def __init__(self, distance, obj):
+        self.distance = distance
+        self.unique_sorting_id = id(self)
+        self.obj = obj
+
+    def heap_object(self):
+        return self.distance, self.unique_sorting_id, self.obj
 
 
 class Node:
@@ -64,6 +77,14 @@ class Node:
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
         raise NotImplementedError()
 
+    @abc.abstractmethod
+    def remove_by_id(self, identifier):
+        raise NotImplementedError()
+
+    # @abc.abstractmethod
+    # def remove_by_value(self, value):
+    #     raise NotImplementedError()
+
 
 class NonLeafNode(Node):
     def __init__(self, mtree_pointer):
@@ -94,14 +115,11 @@ class NonLeafNode(Node):
         # at least 2 of the routing objects need to point to leaf nodes!
         candidates = [x for x in self.routing_objects if isinstance(x.covering_tree, LeafNode)]
         assert len(candidates) >= 2
-        # candidates = sorted([x for x in candidates if len(x.covering_tree.mtree_objects.values()) > 0],
-        #                     key=lambda x: len(x.covering_tree.mtree_objects.values()),
-        #                     reverse=True)
         candidates = sorted(candidates,
                             key=lambda x: len(x.covering_tree.mtree_objects.values()),
                             reverse=True)
 
-        # assert len(candidates) >= 2
+        assert len(candidates) >= 2
         fullest_routing_object = candidates[0]
         fullest_leafnode = fullest_routing_object.covering_tree
         assert fullest_leafnode is not None
@@ -155,8 +173,15 @@ class NonLeafNode(Node):
         if self.is_full():
             self.split_and_promote()
 
+    def remove_routing_object(self, routing_object):
+        self.routing_objects.discard(routing_object)
+
     def values(self) -> Set[MtreeElement]:
         return set().union(*([x.values() for x in self.routing_objects]))
+
+    def remove_by_id(self, identifier):
+        for ro in self.routing_objects:
+            ro.remove_by_id(identifier)
 
     def find_in_radius(self, value, radius) -> Iterator[RangeItem]:
         return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
@@ -166,7 +191,7 @@ class NonLeafNode(Node):
         for ro in self.routing_objects:
             distance_to_value = self.distance_measure(value, ro.routing_value.value)
             lower_bound = max([0, distance_to_value - ro.covering_radius])
-            heapq.heappush(heap, (lower_bound, randrange(100000000000), ro))
+            heapq.heappush(heap, HeapObject(lower_bound, ro).heap_object())
         return heap, current_elements
 
     def __repr__(self):
@@ -194,7 +219,7 @@ class LeafNode(Node):
         new_routing_object_value: MTreeObject = \
             sorted(self.mtree_objects.values(), key=lambda item: item.distance_to_parent_routing_object)[-1]
 
-        self.remove(new_routing_object_value.identifier)
+        self.remove_by_id(new_routing_object_value.identifier)
         # assign points that will move to that new routing object
         objects_to_move: Set[MTreeObject] = set()
         for element in self.mtree_objects.values():
@@ -213,9 +238,6 @@ class LeafNode(Node):
             new_leaf_node.insert(element)
             self.mtree_objects.pop(
                 element.identifier)  # remove objects from current node if they got assigned to the new leaf
-
-        # new_routing_object_dist_to_parent = self.mtree_pointer.distance_measure(new_routing_object_value.value,
-        #                                                                         self.parent_routing_object.routing_value.value)
 
         new_routing_object = RoutingObject(new_routing_object_value, new_routing_object_radius, new_leaf_node,
                                            self.parent_node, self.mtree_pointer)
@@ -238,9 +260,14 @@ class LeafNode(Node):
         if self.is_full():
             self.split_and_promote()
 
-    def remove(self, identifier):
-        self.mtree_objects.pop(identifier)
+    def remove_by_id(self, identifier):
+        self.mtree_objects.pop(identifier, None)
         self.update_radius()
+
+    def remove_by_value(self, value):
+        if value in self.mtree_objects.values():
+            self.mtree_objects = {key: val for key, val in self.mtree_objects.items() if val != value}
+            self.update_radius()
 
     def values(self) -> Set[MtreeElement]:
         return set([MtreeElement(x.identifier, x.value) for x in self.mtree_objects.values()])
@@ -252,7 +279,7 @@ class LeafNode(Node):
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
         for element in self.mtree_objects.values():
             distance = self.mtree_pointer.distance_measure(element.value, value)
-            heapq.heappush(current_elements, (distance, randrange(100000000000), RangeItem(element, distance)))
+            heapq.heappush(current_elements, HeapObject(distance, RangeItem(element, distance)).heap_object())
         return heap, current_elements
 
     def __repr__(self):
@@ -266,7 +293,6 @@ class RoutingObject:
         self.assigned_node: Node = assigned_node
         self.covering_radius: Number = covering_radius
         self.covering_tree: Optional[Node] = covering_tree  # child node
-        # self.distance_to_parent_routing_object: Number = distance_to_parent
         self.mtree_pointer = mtree_pointer
 
     def parent_node(self):
@@ -292,10 +318,36 @@ class RoutingObject:
         else:
             return {MtreeElement(self.routing_value.identifier, self.routing_value.value)}
 
+    def remove_by_id(self, identifier):
+        if self.covering_tree is None and self.routing_value.identifier == identifier:
+            pn = self.parent_node()
+            if pn is not None:
+                self.parent_node().remove_routing_object(self)
+            return
+            # TODO potentially change all ancestor covering tree radii
+        if self.routing_value.identifier != identifier and self.covering_tree is not None:
+            self.covering_tree.remove_by_id(identifier)
+            return
+        else:
+            # delete the routing_value
+            # idea: select a child element, make it the new routing value, and re-insert all the children
+
+            child_elements = [x for x in list(self.values()) if x.identifier != identifier]
+            if len(child_elements) == 0:
+                if self.parent_node() is not None:
+                    self.parent_node().remove_routing_object(self)
+                return
+            self.routing_value = child_elements[0]
+            self.covering_tree = None
+            self.covering_radius = 0
+            for child in child_elements[1:]:
+                mtree_obj = MTreeObject(child.identifier, child.value,
+                                        self.mtree_pointer.distance_measure(child.value, self.routing_value.value),
+                                        self.mtree_pointer)
+                self.insert(mtree_obj)
+
     def find_in_radius(self, value, radius) -> List[RangeItem]:
         distance_to_routing_object_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
-        lower_bound = self.routing_value.value - self.covering_radius
-        upper_bound = self.routing_value.value + self.covering_radius
 
         if distance_to_routing_object_value > radius + self.covering_radius:  # no overlap
             return []
@@ -309,9 +361,10 @@ class RoutingObject:
         distance_to_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
         lower_bound = max([0, distance_to_value - self.covering_radius])
         heapq.heappush(current_elements,
-                       (distance_to_value, randrange(100000000000), RangeItem(self.routing_value, distance_to_value)))
+                       HeapObject(distance_to_value, RangeItem(self.routing_value, distance_to_value)).heap_object())
+
         if self.covering_tree is not None:
-            heapq.heappush(heap, (lower_bound, randrange(100000000000), self.covering_tree))
+            heapq.heappush(heap, HeapObject(lower_bound, self.covering_tree).heap_object())
         return heap, current_elements
 
     def __repr__(self):
@@ -334,7 +387,9 @@ class MTree:
         else:
             self._root_node.insert(new_mtree_object)
 
-    def delete(self, identifier, obj=None):
+    def remove_by_id(self, identifier):
+        if self._root_node is not None:
+            self._root_node.remove_by_id(identifier)
         pass
 
     def values(self) -> Set[MtreeElement]:
@@ -389,4 +444,3 @@ class MTree:
                     else:
                         return return_elements
         return return_elements
-
