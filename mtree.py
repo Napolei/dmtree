@@ -1,7 +1,9 @@
 import abc
+import copy
 import heapq
 import itertools
 import math
+import random
 from numbers import Number
 from typing import Optional, Set, Dict, List, Iterator
 
@@ -41,8 +43,9 @@ class HeapObject:
 
     def __init__(self, distance, obj):
         self.distance = distance
-        self.unique_sorting_id = id(self)
+        self.unique_sorting_id = HeapObject.next_id
         self.obj = obj
+        HeapObject.next_id += 1
 
     def heap_object(self):
         return self.distance, self.unique_sorting_id, self.obj
@@ -54,7 +57,6 @@ class Node:
         self.distance_measure = mtree_pointer.distance_measure
         self.parent_routing_object: Optional[RoutingObject] = None
         self.parent_node: Optional[NonLeafNode] = None  # holder of parent_routing_object
-        # self.ids = set()
 
     def is_root(self):
         return self == self.mtree_pointer._root_node
@@ -87,10 +89,6 @@ class Node:
     def remove_by_id(self, identifier):
         raise NotImplementedError()
 
-    # @abc.abstractmethod
-    # def remove_by_value(self, value):
-    #     raise NotImplementedError()
-
 
 class NonLeafNode(Node):
     def __init__(self, mtree_pointer):
@@ -101,7 +99,6 @@ class NonLeafNode(Node):
         return self.mtree_pointer.inner_node_capacity < len(self.routing_objects)
 
     def insert(self, mtree_object: MTreeObject) -> None:
-        # self.ids.add(mtree_object.identifier)
         candidates = sorted(
             [RangeItem(x, self.mtree_pointer.distance_measure(mtree_object.value, x.routing_value.value)) for x in
              self.routing_objects], key=lambda x: x.r)
@@ -110,6 +107,7 @@ class NonLeafNode(Node):
             # we are in the root node
             new_routing_object = RoutingObject(mtree_object, 0, None, self, self.mtree_pointer)
             self.insert_routing_object(new_routing_object)
+            new_routing_object.insert(mtree_object)
         else:
             # insert it into the closest candidate
             closest_routing_object: RoutingObject = candidates[0].obj
@@ -121,7 +119,7 @@ class NonLeafNode(Node):
     def split_and_promote(self):
         # at least 2 of the routing objects need to point to leaf nodes!
         candidates = [x for x in self.routing_objects if isinstance(x.covering_tree, LeafNode)]
-        assert len(candidates) >= 2
+        # assert len(candidates) >= 2
         candidates = sorted(candidates,
                             key=lambda x: len(x.covering_tree.mtree_objects.values()),
                             reverse=True)
@@ -135,8 +133,8 @@ class NonLeafNode(Node):
 
         # choose a random object inside the leafnode
         identifier, new_routing_object_value = fullest_leafnode.mtree_objects.popitem()
-        fullest_routing_object.ids.remove(new_routing_object_value.identifier)
-        # fullest_leafnode.ids.remove(identifier)
+        fullest_leafnode.insert(new_routing_object_value)
+
         fullest_leafnode.update_radius()
         for mtree_obj in fullest_leafnode.mtree_objects.values():
             mtree_obj.distance_to_parent_routing_object = self.mtree_pointer.distance_measure(mtree_obj.value,
@@ -168,11 +166,7 @@ class NonLeafNode(Node):
         new_routing_object = RoutingObject(new_routing_object_value, new_routing_object_radius, new_covering_tree, self,
                                            self.mtree_pointer)
         new_covering_tree.parent_routing_object = new_routing_object
-        for child in all_children:
-            new_routing_object.ids.add(child.identifier)
-        new_routing_object.ids.add(fullest_routing_object.routing_value.identifier)
-        new_routing_object.ids.add(fullest_routing_object_2.routing_value.identifier)
-        # remove the two candidates from current node
+
         self.routing_objects.remove(fullest_routing_object)
         self.routing_objects.remove(fullest_routing_object_2)
 
@@ -197,23 +191,26 @@ class NonLeafNode(Node):
     def values(self) -> Set[MtreeElement]:
         return set().union(*([x.values() for x in self.routing_objects]))
 
-    def ids(self):
-        return itertools.chain(*[ro.ids for ro in self.routing_objects])
-
     def remove_by_id(self, identifier):
         for ro in list(self.routing_objects):
-            if identifier in ro.ids:
-                ro.remove_by_id(identifier)
+            ro.remove_by_id(identifier)
 
     def find_in_radius(self, value, radius) -> Iterator[RangeItem]:
         return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
 
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
-        # add routing objects to heap
         for ro in self.routing_objects:
             distance_to_value = self.distance_measure(value, ro.routing_value.value)
             lower_bound = max([0, distance_to_value - ro.covering_radius])
             heapq.heappush(heap, HeapObject(lower_bound, ro).heap_object())
+        return heap, current_elements
+
+    def do_fn(self, value, _, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        for ro in self.routing_objects:
+            distance_to_value = self.distance_measure(value, ro.routing_value.value)
+            upper_bound = max([0, distance_to_value + ro.covering_radius])
+            new_heap_object = HeapObject(-1*upper_bound, ro).heap_object()
+            heapq.heappush(heap, new_heap_object)
         return heap, current_elements
 
     def __repr__(self):
@@ -226,6 +223,7 @@ class LeafNode(Node):
         # self.ids = set()
         self.mtree_objects: Dict[str, MTreeObject] = {}
         self.radius = 0
+        self.mtree_pointer._leaf_nodes.add(self)
 
     def update_radius(self):
         if len(self.mtree_objects) == 0:
@@ -236,52 +234,56 @@ class LeafNode(Node):
     def is_full(self) -> bool:
         return self.mtree_pointer.leaf_node_capacity < len(self.mtree_objects.keys())
 
-    def ids(self):
-        return self.mtree_objects.keys()
+    def _assign_points_to_nearest_routing_object(self, ro_1: MTreeObject, ro_2: MTreeObject,
+                                                 points: List[MTreeObject]) -> (List[MTreeObject], List[MTreeObject]):
+        ro_1_children = []
+        ro_2_children = []
+        for point in points:
+            dist_1 = self.mtree_pointer.distance_measure(ro_1.value, point.value)
+            dist_2 = self.mtree_pointer.distance_measure(ro_2.value, point.value)
+            if dist_1 <= dist_2:
+                ro_1_children.append(MTreeObject(point.identifier, point.value, dist_1, self.mtree_pointer))
+            else:
+                ro_2_children.append(MTreeObject(point.identifier, point.value, dist_2, self.mtree_pointer))
+
+        return ro_1_children, ro_2_children
+
+    def _split_and_promote_random(self) -> (MTreeObject, List[MTreeObject], MTreeObject, List[MTreeObject]):
+        members = list(self.mtree_objects.values())
+        random.shuffle(members)
+        assert len(members) >= 2
+        ro_1 = members[0]
+        ro_2 = members[1]
+        ro_1_members, ro_2_members = self._assign_points_to_nearest_routing_object(ro_1, ro_2, members)
+        return ro_1, ro_1_members, ro_2, ro_2_members
 
     def split_and_promote(self):
-        # select a new point to create a new routing object
-        # select the furthest point
-        new_routing_object_value: MTreeObject = \
-            sorted(self.mtree_objects.values(), key=lambda item: item.distance_to_parent_routing_object)[-1]
+        if self.mtree_pointer.split_method == 'random':
+            rv_1, ro_1_members, rv_2, ro_2_members = self._split_and_promote_random()
+        else:
+            raise Exception('Splitting method not supported')
 
-        self.parent_routing_object.ids.remove(new_routing_object_value.identifier)
-        self.remove_by_id(new_routing_object_value.identifier)
-        # assign points that will move to that new routing object
-        objects_to_move: Set[MTreeObject] = set()
-        for element in self.mtree_objects.values():
-            if element != new_routing_object_value:
-                dist_to_new_routing_object_value = self.mtree_pointer.distance_measure(new_routing_object_value.value,
-                                                                                       element.value)
-                if dist_to_new_routing_object_value < element.distance_to_parent_routing_object:
-                    element.distance_to_parent_routing_object = dist_to_new_routing_object_value
-                    objects_to_move.add(element)
+        ro_1 = self._create_routing_object_from_points(rv_1, ro_1_members)
+        ro_2 = self._create_routing_object_from_points(rv_2, ro_2_members)
+        self.parent_node.remove_routing_object(self.parent_routing_object)
+        self.parent_node.insert_routing_object(ro_1)
+        self.parent_node.insert_routing_object(ro_2)
 
-        new_routing_object_radius = 0 if len(objects_to_move) == 0 else max(
-            [x.distance_to_parent_routing_object for x in objects_to_move])
+    def _create_routing_object_from_points(self, routing_value: MTreeObject, points: List[MTreeObject]):
+
         new_leaf_node = LeafNode(self.mtree_pointer)
 
-        for element in objects_to_move:
+        for element in points:
             new_leaf_node.insert(element)
-            self.mtree_objects.pop(
-                element.identifier)  # remove objects from current node if they got assigned to the new leaf
-            # self.ids.remove(element.identifier)
-            self.parent_routing_object.ids.remove(element.identifier)
 
-        new_routing_object = RoutingObject(new_routing_object_value, new_routing_object_radius, new_leaf_node,
-                                           self.parent_node, self.mtree_pointer)
+        new_routing_object = RoutingObject(routing_value, new_leaf_node.radius, new_leaf_node, self.parent_node,
+                                           self.mtree_pointer)
 
-        for element in objects_to_move:
-            new_routing_object.ids.add(element.identifier)
+        # for element in points:
+        #     new_routing_object.ids.add(element.identifier)
         new_leaf_node.parent_node = self.parent_node
         new_leaf_node.parent_routing_object = new_routing_object
-        # add the routing object to the parent node and split it if necessary
-
-        # update the current leafnode radius
-        self.radius = 0 if len(self.mtree_objects.values()) == 0 else max(
-            [x.distance_to_parent_routing_object for x in self.mtree_objects.values()])
-
-        self.parent_node.insert_routing_object(new_routing_object)
+        return new_routing_object
 
     def insert(self, mtree_object: MTreeObject) -> None:
         # self.ids.add(mtree_object.identifier)
@@ -293,13 +295,16 @@ class LeafNode(Node):
             self.split_and_promote()
 
     def remove_by_id(self, identifier):
-        # self.ids.remove(identifier)
+        old_radius = self.radius
         self.mtree_objects.pop(identifier, None)
         if len(self.mtree_objects) == 0:
             self.parent_routing_object.covering_tree = None
             self.parent_routing_object.covering_radius = 0
         else:
             self.update_radius()
+            new_radius = self.radius
+            if new_radius != old_radius:
+                self.parent_routing_object.update_radius()
 
     def remove_by_value(self, value):
         if value in self.mtree_objects.values():
@@ -322,25 +327,42 @@ class LeafNode(Node):
             heapq.heappush(current_elements, HeapObject(distance, RangeItem(element, distance)).heap_object())
         return heap, current_elements
 
+    def do_fn(self, value, _, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        for element in self.mtree_objects.values():
+            distance = self.mtree_pointer.distance_measure(element.value, value)
+            heapq.heappush(current_elements, HeapObject(-1 * distance, RangeItem(element, distance)).heap_object())
+        return heap, current_elements
+
     def __repr__(self):
         return f'LeafNode[values={list(self.mtree_objects.values())}]'
 
 
 class RoutingObject:
     def __init__(self, routing_value, covering_radius, covering_tree, assigned_node, mtree_pointer):
-        # self.obj = obj
-        self.routing_value = routing_value
+        self.routing_value = copy.copy(routing_value)
         self.assigned_node: Node = assigned_node
         self.covering_radius: Number = covering_radius
         self.covering_tree: Optional[Node] = covering_tree  # child node
         self.mtree_pointer = mtree_pointer
-        self.ids = {routing_value.identifier}
 
     def parent_node(self):
         return self.assigned_node.parent_node
 
+    def update_radius(self):
+        old_covering_radius = self.covering_radius
+        parent_routing_object = self.assigned_node.parent_routing_object
+        furthest_child = self.fn(self.routing_value.value)
+        if furthest_child is None:
+            self.covering_radius = 0
+            parent_routing_object.update_radius()
+        else:
+            new_covering_radius = furthest_child.r
+            if new_covering_radius < old_covering_radius:
+                self.covering_radius = new_covering_radius
+                if parent_routing_object is not None:
+                    parent_routing_object.update_radius()
+
     def insert(self, mtree_object):
-        self.ids.add(mtree_object.identifier)
         if self.covering_radius < mtree_object.distance_to_parent_routing_object:
             self.covering_radius = mtree_object.distance_to_parent_routing_object
         if self.covering_tree:
@@ -360,66 +382,17 @@ class RoutingObject:
             return set()
 
     def values(self) -> Set[MtreeElement]:
-        if self.covering_tree:
-            return {MtreeElement(self.routing_value.identifier, self.routing_value.value)}.union(
-                self.covering_tree.values())
+        if self.covering_tree is not None:
+            return self.covering_tree.values()
         else:
-            return {MtreeElement(self.routing_value.identifier, self.routing_value.value)}
+            return set()
 
     def remove_by_id(self, identifier):
-        if identifier not in self.ids:
-            raise Exception(
-                f'Can\'t delete object with identifier={identifier} since it does not belong to this routing_object')
-        self.ids.remove(identifier)
-        if self.covering_tree is None:
-            if self.routing_value.identifier == identifier:
-                # print('scenario 5')
-                # pn = self.parent_node()
-                # if pn is not None:
-                #     self.parent_node().remove_routing_object(self)
-                self.assigned_node.remove_routing_object(self)
-                return
-                # TODO search optimization: potentially decrease all ancestor covering tree radii
-            else:
-                return
-        if self.routing_value.identifier != identifier and self.covering_tree is not None and identifier in self.covering_tree.ids():
-            # print('scenario 4')
+        if self.covering_tree is not None:
             self.covering_tree.remove_by_id(identifier)
-            return
-        else:
-            # TODO optimize here by using KNN(1) on the children
-            # or by limiting self.leafnode_values() by radius
-            children_leafnodes = sorted(
-                [RangeItem(x, self.mtree_pointer.distance_measure(x.value, self.routing_value.value))
-                 for x in self.leafnode_values()], key=lambda x: x.r)
-            if len(children_leafnodes) > 0:
-                # print('scenario 1')
-                new_routing_value = children_leafnodes[0].obj
-                self.routing_value = new_routing_value
-                self.covering_radius = self.covering_radius + children_leafnodes[0].r
-                if self.covering_tree:
-                    # print('inside if')
-                    self.covering_tree.remove_by_id(new_routing_value.identifier)
-            else:
-                # delete the routing_value
-                # idea: select a child element, make it the new routing value, and re-insert all the children
-                # print('scenario 2')
-                child_elements = [x for x in list(self.values()) if x.identifier != identifier]
-                if len(child_elements) == 0:
-                    # if self.parent_node() is not None:
-                    #     self.parent_node().remove_routing_object(self)
-                    self.assigned_node.remove_routing_object(self)
-                    return
-                self.routing_value = child_elements[0]
-                self.covering_tree = None
-                self.covering_radius = 0
-                for child in child_elements[1:]:
-                    mtree_obj = MTreeObject(child.identifier, child.value,
-                                            self.mtree_pointer.distance_measure(child.value, self.routing_value.value),
-                                            self.mtree_pointer)
-                    self.insert(mtree_obj)
 
     def find_in_radius(self, value, radius) -> List[RangeItem]:
+        # TODO optimize
         distance_to_routing_object_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
 
         if distance_to_routing_object_value > radius + self.covering_radius:  # no overlap
@@ -430,7 +403,8 @@ class RoutingObject:
         else:
             return children_in_radius
 
-    def knn(self, value, _, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+    def knn(self, value, _1, _2, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        # TODO optimize
         distance_to_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
         lower_bound = max([0, distance_to_value - self.covering_radius])
         heapq.heappush(current_elements,
@@ -439,6 +413,44 @@ class RoutingObject:
         if self.covering_tree is not None:
             heapq.heappush(heap, HeapObject(lower_bound, self.covering_tree).heap_object())
         return heap, current_elements
+
+    @staticmethod
+    def _continue_fn_search(k: int, heap: heapq, current_elements: heapq):
+        if len(heap) == 0:
+            return False
+        if len(current_elements) < 1:
+            return True
+        upper_bound, _, highest_distance_node = heapq.nsmallest(1, heap)[0]
+        upper_bound *= -1
+        distance_element, _, highest_distance_element = heapq.nlargest(k, current_elements)[-1]
+        if distance_element <= upper_bound:
+            return True
+        else:
+            return False
+
+    def do_fn(self, value, _, heap: heapq, current_elements: heapq) -> (heapq, heapq):
+        if self.covering_tree is None:
+            return heap, current_elements
+        else:
+            distance_to_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
+            upper_bound = max([0, distance_to_value + self.covering_radius])
+            heapq.heappush(heap, HeapObject(-1 * upper_bound, self.covering_tree).heap_object())
+        return heap, current_elements
+
+    def fn(self, value) -> Optional[RangeItem]:
+        heap: heapq = []
+        current_elements = []
+
+        heap, current_elements = self.do_fn(value, math.inf, heap, current_elements)
+        while self._continue_fn_search(1, heap, current_elements):
+            _, _, next_candidate = heapq.heappop(heap)
+            heap, current_elements = next_candidate.do_fn(value, math.inf, heap, current_elements)
+
+        if len(current_elements) == 0:
+            return None
+        else:
+            element = heapq.heappop(current_elements)
+            return RangeItem(element[2].obj, element[2].r)
 
     def __repr__(self):
         return f'RoutingObject[value={self.routing_value}, covering_tree={self.covering_tree}]'
@@ -450,6 +462,8 @@ class MTree:
         self.leaf_node_capacity = leaf_node_capacity
         self._root_node: Optional[Node] = None
         self.distance_measure = distance_measure
+        self.split_method = 'random'
+        self._leaf_nodes = set()
 
     def insert(self, identifier, obj):
         new_mtree_object = MTreeObject(identifier, obj, math.inf, self)
@@ -460,16 +474,10 @@ class MTree:
         else:
             self._root_node.insert(new_mtree_object)
 
-    def ids(self):
-        if self._root_node is not None:
-            return self._root_node.ids()
-        else:
-            set()
-
     def remove_by_id(self, identifier):
-        if self._root_node is not None:
-            self._root_node.remove_by_id(identifier)
-        pass
+        for leafnode in self._leaf_nodes:
+            if identifier in leafnode.mtree_objects.keys():
+                leafnode.remove_by_id(identifier)
 
     def values(self) -> Set[MtreeElement]:
         if not self._root_node:
