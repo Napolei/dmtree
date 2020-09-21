@@ -13,6 +13,11 @@ class RangeItem:
         self.obj = obj
         self.r = r
 
+    def __eq__(self, other):
+        if other is None or not isinstance(other, RangeItem):
+            return False
+        return self.obj == other.obj and self.r == other.r
+
     def __repr__(self):
         return f'RangeItem[value={self.obj}, range={self.r}]'
 
@@ -115,7 +120,8 @@ class NonLeafNode(Node):
             mtree_object.distance_to_parent_routing_object = closest_routing_object_distance
             closest_routing_object.insert(mtree_object)
 
-    def _choose_new_routing_value_for_split_minimum_sum_distances(self, rv_1, rv_2, candidates: List[MtreeElement]):  # (self, rv_1: RoutingObject, rv_2: RoutingObject, candidates: List[MtreeElement]):
+    def _choose_new_routing_value_for_split_minimum_sum_distances(self, rv_1, rv_2, candidates: List[
+        MtreeElement]):  # (self, rv_1: RoutingObject, rv_2: RoutingObject, candidates: List[MtreeElement]):
         minimum_sum = math.inf
         element = None
         for candidate in candidates:
@@ -211,7 +217,7 @@ class NonLeafNode(Node):
         for ro in self.routing_objects:
             distance_to_value = self.distance_measure(value, ro.routing_value.value)
             upper_bound = max([0, distance_to_value + ro.covering_radius])
-            new_heap_object = HeapObject(-1*upper_bound, ro).heap_object()
+            new_heap_object = HeapObject(-1 * upper_bound, ro).heap_object()
             heapq.heappush(heap, new_heap_object)
         return heap, current_elements
 
@@ -455,6 +461,10 @@ class RoutingObject:
 
 class MTree:
     def __init__(self, distance_measure, inner_node_capacity=20, leaf_node_capacity=20):
+        if inner_node_capacity < 2:
+            raise ValueError(f'inner_node_capacity must be >=2, got {inner_node_capacity}')
+        if leaf_node_capacity < 2:
+            raise ValueError(f'leaf_node_capacity must be >=2, got {leaf_node_capacity}')
         self.inner_node_capacity = inner_node_capacity
         self.leaf_node_capacity = leaf_node_capacity
         self._root_node: Optional[Node] = None
