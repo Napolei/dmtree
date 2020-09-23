@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from mtree import MTree
+from mtree import MTree, RangeElement, MtreeElement
 
 
 def distance(p1, p2):
@@ -50,3 +50,32 @@ class TestMTree:
     def test_leaf_node_capacity_greater_than_2(self):
         with pytest.raises(ValueError) as _:
             MTree(distance_measure=None, leaf_node_capacity=1)
+
+    def test_knn_result_elements(self):
+        mtree = create_full_mtree()
+        nn = mtree.knn(value=50.5, k=2, truncate=True)
+        assert len(nn) == 2
+        expected_element_1 = RangeElement(MtreeElement(50, 50), 0.5)
+        expected_element_2 = RangeElement(MtreeElement(51, 51), 0.5)
+        assert expected_element_1 in nn
+        assert expected_element_2 in nn
+        unexpected_element_1 = RangeElement(MtreeElement(52, 50), 1.5)
+        assert unexpected_element_1 not in nn
+
+    def test_knn_truncate(self):
+        mtree = create_full_mtree()
+        nn = mtree.knn(value=50, k=2, truncate=True)
+        assert len(nn) == 2
+        nn = mtree.knn(value=50, k=2, truncate=False)
+        assert len(nn) == 3
+
+    def test_find_in_radius(self):
+        mtree = create_full_mtree()
+        results = mtree.find_in_radius(value=50.5, radius=1)
+        assert len(results) == 2
+        expected_element_1 = RangeElement(MtreeElement(50, 50), 0.5)
+        expected_element_2 = RangeElement(MtreeElement(51, 51), 0.5)
+        assert expected_element_1 in results
+        assert expected_element_2 in results
+        unexpected_element_1 = RangeElement(MtreeElement(52, 50), 1.5)
+        assert unexpected_element_1 not in results

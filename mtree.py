@@ -8,18 +8,18 @@ from numbers import Number
 from typing import Optional, Set, Dict, List, Iterator
 
 
-class RangeItem:
-    def __init__(self, obj, r):
-        self.obj = obj
+class RangeElement:
+    def __init__(self, element, r):
+        self.element = element
         self.r = r
 
     def __eq__(self, other):
-        if other is None or not isinstance(other, RangeItem):
+        if other is None or not isinstance(other, RangeElement):
             return False
-        return self.obj == other.obj and self.r == other.r
+        return self.element == other.element and self.r == other.r
 
     def __repr__(self):
-        return f'RangeItem[value={self.obj}, range={self.r}]'
+        return f'RangeItem[value={self.element}, range={self.r}]'
 
 
 class MtreeElement:
@@ -27,11 +27,19 @@ class MtreeElement:
         self.identifier = identifier
         self.value = value
 
+    def __eq__(self, other):
+        if other is None or not isinstance(other, MtreeElement):
+            return False
+        return self.identifier == other.identifier and self.value == other.value
+
+    def __hash__(self):
+        return id(self)
+
     def __repr__(self):
         return f'MtreeElement[id={self.identifier}, value={self.value}]'
 
 
-class MTreeObject:
+class LeafNodeElement:
     # objects that belong to leaf nodes
     def __init__(self, identifier, value, distance_to_parent_routing_object, mtree_pointer):
         self.identifier = identifier
@@ -83,7 +91,7 @@ class Node:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def find_in_radius(self, value, radius) -> List[RangeItem]:
+    def find_in_radius(self, value, radius) -> List[RangeElement]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -103,9 +111,9 @@ class NonLeafNode(Node):
     def is_full(self) -> bool:
         return self.mtree_pointer.inner_node_capacity < len(self.routing_objects)
 
-    def insert(self, mtree_object: MTreeObject) -> None:
+    def insert(self, mtree_object: LeafNodeElement) -> None:
         candidates = sorted(
-            [RangeItem(x, self.mtree_pointer.distance_measure(mtree_object.value, x.routing_value.value)) for x in
+            [RangeElement(x, self.mtree_pointer.distance_measure(mtree_object.value, x.routing_value.value)) for x in
              self.routing_objects], key=lambda x: x.r)
 
         if len(candidates) == 0:
@@ -115,7 +123,7 @@ class NonLeafNode(Node):
             new_routing_object.insert(mtree_object)
         else:
             # insert it into the closest candidate
-            closest_routing_object: RoutingObject = candidates[0].obj
+            closest_routing_object: RoutingObject = candidates[0].element
             closest_routing_object_distance = candidates[0].r
             mtree_object.distance_to_parent_routing_object = closest_routing_object_distance
             closest_routing_object.insert(mtree_object)
@@ -203,7 +211,7 @@ class NonLeafNode(Node):
         for ro in list(self.routing_objects):
             ro.remove_by_id(identifier)
 
-    def find_in_radius(self, value, radius) -> Iterator[RangeItem]:
+    def find_in_radius(self, value, radius) -> Iterator[RangeElement]:
         return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
 
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
@@ -228,7 +236,7 @@ class NonLeafNode(Node):
 class LeafNode(Node):
     def __init__(self, mtree_pointer):
         super().__init__(mtree_pointer)
-        self.mtree_objects: Dict[str, MTreeObject] = {}
+        self.mtree_objects: Dict[str, LeafNodeElement] = {}
         self.radius = 0
         self.mtree_pointer._leaf_nodes.add(self)
 
@@ -241,21 +249,23 @@ class LeafNode(Node):
     def is_full(self) -> bool:
         return self.mtree_pointer.leaf_node_capacity < len(self.mtree_objects.keys())
 
-    def _assign_points_to_nearest_routing_object(self, ro_1: MTreeObject, ro_2: MTreeObject,
-                                                 points: List[MTreeObject]) -> (List[MTreeObject], List[MTreeObject]):
+    def _assign_points_to_nearest_routing_object(self, ro_1: LeafNodeElement, ro_2: LeafNodeElement,
+                                                 points: List[LeafNodeElement]) -> (
+            List[LeafNodeElement], List[LeafNodeElement]):
         ro_1_children = []
         ro_2_children = []
         for point in points:
             dist_1 = self.mtree_pointer.distance_measure(ro_1.value, point.value)
             dist_2 = self.mtree_pointer.distance_measure(ro_2.value, point.value)
             if dist_1 <= dist_2:
-                ro_1_children.append(MTreeObject(point.identifier, point.value, dist_1, self.mtree_pointer))
+                ro_1_children.append(LeafNodeElement(point.identifier, point.value, dist_1, self.mtree_pointer))
             else:
-                ro_2_children.append(MTreeObject(point.identifier, point.value, dist_2, self.mtree_pointer))
+                ro_2_children.append(LeafNodeElement(point.identifier, point.value, dist_2, self.mtree_pointer))
 
         return ro_1_children, ro_2_children
 
-    def _split_and_promote_random(self) -> (MTreeObject, List[MTreeObject], MTreeObject, List[MTreeObject]):
+    def _split_and_promote_random(self) -> (
+            LeafNodeElement, List[LeafNodeElement], LeafNodeElement, List[LeafNodeElement]):
         members = list(self.mtree_objects.values())
         random.shuffle(members)
         assert len(members) >= 2
@@ -276,7 +286,7 @@ class LeafNode(Node):
         self.parent_node.insert_routing_object(ro_1)
         self.parent_node.insert_routing_object(ro_2)
 
-    def _create_routing_object_from_points(self, routing_value: MTreeObject, points: List[MTreeObject]):
+    def _create_routing_object_from_points(self, routing_value: LeafNodeElement, points: List[LeafNodeElement]):
 
         new_leaf_node = LeafNode(self.mtree_pointer)
 
@@ -290,7 +300,7 @@ class LeafNode(Node):
         new_leaf_node.parent_routing_object = new_routing_object
         return new_routing_object
 
-    def insert(self, mtree_object: MTreeObject) -> None:
+    def insert(self, mtree_object: LeafNodeElement) -> None:
         self.mtree_objects[mtree_object.identifier] = mtree_object
         if mtree_object.distance_to_parent_routing_object >= self.radius:
             self.radius = mtree_object.distance_to_parent_routing_object
@@ -321,20 +331,23 @@ class LeafNode(Node):
     def values(self) -> Set[MtreeElement]:
         return set([MtreeElement(x.identifier, x.value) for x in self.mtree_objects.values()])
 
-    def find_in_radius(self, value, radius) -> List[RangeItem]:
-        ranges = [RangeItem(x.value, self.distance_measure(x.value, value)) for x in self.mtree_objects.values()]
+    def find_in_radius(self, value, radius) -> List[RangeElement]:
+        ranges = [RangeElement(MtreeElement(x.identifier, x.value), self.distance_measure(x.value, value)) for x in
+                  self.mtree_objects.values()]
         return [x for x in ranges if x.r <= radius]
 
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
         for element in self.mtree_objects.values():
             distance = self.mtree_pointer.distance_measure(element.value, value)
-            heapq.heappush(current_elements, HeapObject(distance, RangeItem(element, distance)).heap_object())
+            heapq.heappush(current_elements, HeapObject(distance,
+                                                        RangeElement(MtreeElement(element.identifier, element.value),
+                                                                     distance)).heap_object())
         return heap, current_elements
 
     def do_fn(self, value, _, heap: heapq, current_elements: heapq) -> (heapq, heapq):
         for element in self.mtree_objects.values():
             distance = self.mtree_pointer.distance_measure(element.value, value)
-            heapq.heappush(current_elements, HeapObject(-1 * distance, RangeItem(element, distance)).heap_object())
+            heapq.heappush(current_elements, HeapObject(-1 * distance, RangeElement(element, distance)).heap_object())
         return heap, current_elements
 
     def __repr__(self):
@@ -395,7 +408,7 @@ class RoutingObject:
         if self.covering_tree is not None:
             self.covering_tree.remove_by_id(identifier)
 
-    def find_in_radius(self, value, radius) -> List[RangeItem]:
+    def find_in_radius(self, value, radius) -> List[RangeElement]:
         # TODO optimize
         distance_to_routing_object_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
 
@@ -440,7 +453,7 @@ class RoutingObject:
             heapq.heappush(heap, HeapObject(-1 * upper_bound, self.covering_tree).heap_object())
         return heap, current_elements
 
-    def fn(self, value) -> Optional[RangeItem]:
+    def fn(self, value) -> Optional[RangeElement]:
         heap: heapq = []
         current_elements = []
 
@@ -453,7 +466,7 @@ class RoutingObject:
             return None
         else:
             element = heapq.heappop(current_elements)
-            return RangeItem(element[2].obj, element[2].r)
+            return RangeElement(element[2].element, element[2].r)
 
     def __repr__(self):
         return f'RoutingObject[value={self.routing_value}, covering_tree={self.covering_tree}]'
@@ -473,7 +486,7 @@ class MTree:
         self._leaf_nodes = set()
 
     def insert(self, identifier, obj):
-        new_mtree_object = MTreeObject(identifier, obj, math.inf, self)
+        new_mtree_object = LeafNodeElement(identifier, obj, math.inf, self)
         if not self._root_node:
             # empty tree
             self._root_node = NonLeafNode(self)
@@ -492,7 +505,7 @@ class MTree:
         else:
             return self._root_node.values()
 
-    def find_in_radius(self, value, radius) -> List[RangeItem]:
+    def find_in_radius(self, value, radius) -> List[RangeElement]:
         if not self._root_node:
             return []
         return sorted(self._root_node.find_in_radius(value, radius), key=lambda x: x.r)
@@ -510,7 +523,7 @@ class MTree:
         else:
             return False
 
-    def knn(self, value, k, truncate=True) -> List[RangeItem]:
+    def knn(self, value, k, truncate=True) -> List[RangeElement]:
         heap: heapq = []
         current_elements = []
         if not self._root_node:
