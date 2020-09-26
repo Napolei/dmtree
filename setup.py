@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='dmtree',
+    name='downward-mtree',
     version='1.0',
     py_modules=["dmtree"],
     url='https://github.com/Napolei/dmtree',
