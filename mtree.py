@@ -3,9 +3,10 @@ import copy
 import heapq
 import itertools
 import math
+import operator
 import random
 from numbers import Number
-from typing import Optional, Set, Dict, List, Iterator
+from typing import Optional, Set, Dict, List, Iterator, Tuple
 
 
 class RangeElement:
@@ -22,13 +23,13 @@ class RangeElement:
         return f'RangeItem[value={self.element}, range={self.r}]'
 
 
-class MtreeElement:
+class MTreeElement:
     def __init__(self, identifier, value):
         self.identifier = identifier
         self.value = value
 
     def __eq__(self, other):
-        if other is None or not isinstance(other, MtreeElement):
+        if other is None or not isinstance(other, MTreeElement):
             return False
         return self.identifier == other.identifier and self.value == other.value
 
@@ -83,11 +84,11 @@ class Node:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def values(self) -> Set[MtreeElement]:
+    def values(self) -> Set[MTreeElement]:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def leafnode_values(self) -> Set[MtreeElement]:
+    def leafnode_values(self) -> Set[MTreeElement]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -129,7 +130,7 @@ class NonLeafNode(Node):
             closest_routing_object.insert(mtree_object)
 
     def _choose_new_routing_value_for_split_minimum_sum_distances(self, rv_1, rv_2, candidates: List[
-        MtreeElement]):  # (self, rv_1: RoutingObject, rv_2: RoutingObject, candidates: List[MtreeElement]):
+        MTreeElement]):  # (self, rv_1: RoutingObject, rv_2: RoutingObject, candidates: List[MtreeElement]):
         minimum_sum = math.inf
         element = None
         for candidate in candidates:
@@ -201,10 +202,10 @@ class NonLeafNode(Node):
     def remove_routing_object(self, routing_object):
         self.routing_objects.discard(routing_object)
 
-    def leafnode_values(self) -> Set[MtreeElement]:
+    def leafnode_values(self) -> Set[MTreeElement]:
         return set().union(*([x.leafnode_values() for x in self.routing_objects]))
 
-    def values(self) -> Set[MtreeElement]:
+    def values(self) -> Set[MTreeElement]:
         return set().union(*([x.values() for x in self.routing_objects]))
 
     def remove_by_id(self, identifier):
@@ -264,6 +265,87 @@ class LeafNode(Node):
 
         return ro_1_children, ro_2_children
 
+    def _precompute_distances(self, candidates) -> Dict[Tuple[str, str], Number]:
+        dist_cache: Dict[Tuple[str, str], Number] = {}
+        for m1 in candidates:
+            for m2 in candidates:
+                if (m1.identifier, m2.identifier) not in dist_cache.keys():
+                    dist = self.mtree_pointer.distance_measure(m1.value, m2.value)
+                    dist_cache[(m1.identifier, m2.identifier)] = dist
+                    dist_cache[(m2.identifier, m1.identifier)] = dist
+        return dist_cache
+
+    @staticmethod
+    def _assign_values_to_closest_ro(ro_1, ro_2, candidates, dist_cache):
+        list_1 = []
+        list_2 = []
+        for candidate in candidates:
+            dist_1 = dist_cache[(ro_1.identifier, candidate.identifier)]
+            dist_2 = dist_cache[(ro_2.identifier, candidate.identifier)]
+            if dist_1 < dist_2:
+                list_1.append(LeafNodeElement(candidate.identifier, candidate.value, dist_1, candidate.mtree_pointer))
+            else:
+                list_2.append(LeafNodeElement(candidate.identifier, candidate.value, dist_2, candidate.mtree_pointer))
+        return list_1, list_2
+
+    def _split_and_promote_max_distance(self) -> (
+            LeafNodeElement, List[LeafNodeElement], LeafNodeElement, List[LeafNodeElement]):
+        members = set(self.mtree_objects.values())
+
+        id_mapper = {}
+        for el in members:
+            id_mapper[el.identifier] = el
+        dist_cache = self._precompute_distances(members)
+        identifier_ro_1, identifier_ro_2 = max(dist_cache.items(), key=operator.itemgetter(1))[0]
+        ro_1 = id_mapper[identifier_ro_1]
+        ro_2 = id_mapper[identifier_ro_2]
+
+        children_1, children_2 = self._assign_values_to_closest_ro(ro_1, ro_2, members, dist_cache)
+        return ro_1, children_1, ro_2, children_2
+
+    def _split_and_promote_min_sum_radii(self) -> (
+            LeafNodeElement, List[LeafNodeElement], LeafNodeElement, List[LeafNodeElement]):
+        members = set(self.mtree_objects.values())
+
+        dist_cache = self._precompute_distances(members)
+
+        ro_1 = None
+        ro_2 = None
+        r_1 = math.inf
+        r_2 = math.inf
+        children_1 = None
+        children_2 = None
+        for ro_candidate_1 in members:
+            for ro_candidate_2 in members:
+                if ro_candidate_1.identifier != ro_candidate_2.identifier:
+                    temp_children_1 = []
+                    temp_children_2 = []
+                    max_1 = 0
+                    max_2 = 0
+                    for member in members:
+                        dist_1 = dist_cache[(ro_candidate_1.identifier, member.identifier)]
+                        dist_2 = dist_cache[(ro_candidate_2.identifier, member.identifier)]
+                        if dist_1 < dist_2:
+                            temp_children_1.append(member)
+                            max_1 = max(max_1, dist_1)
+                        else:
+                            temp_children_2.append(member)
+                            max_2 = max(max_2, dist_2)
+                    if max_1 + max_2 < r_1 + r_2:
+                        ro_1 = ro_candidate_1
+                        ro_2 = ro_candidate_2
+                        r_1 = max_1
+                        r_2 = max_2
+                        children_1 = temp_children_1
+                        children_2 = temp_children_2
+        children_1 = [
+            LeafNodeElement(x.identifier, x.value, dist_cache[(x.identifier, ro_1.identifier)], self.mtree_pointer) for
+            x in children_1]
+        children_2 = [
+            LeafNodeElement(x.identifier, x.value, dist_cache[(x.identifier, ro_2.identifier)], self.mtree_pointer) for
+            x in children_2]
+        return ro_1, children_1, ro_2, children_2
+
     def _split_and_promote_random(self) -> (
             LeafNodeElement, List[LeafNodeElement], LeafNodeElement, List[LeafNodeElement]):
         members = list(self.mtree_objects.values())
@@ -277,9 +359,14 @@ class LeafNode(Node):
     def split_and_promote(self):
         if self.mtree_pointer.split_method == 'random':
             rv_1, ro_1_members, rv_2, ro_2_members = self._split_and_promote_random()
+        elif self.mtree_pointer.split_method == 'min_sum_radii':
+            rv_1, ro_1_members, rv_2, ro_2_members = self._split_and_promote_min_sum_radii()
+        elif self.mtree_pointer.split_method == 'max_distance':
+            rv_1, ro_1_members, rv_2, ro_2_members = self._split_and_promote_max_distance()
         else:
             raise Exception('Splitting method not supported')
 
+        assert len(ro_1_members) + len(ro_2_members) == len(self.mtree_objects)
         ro_1 = self._create_routing_object_from_points(rv_1, ro_1_members)
         ro_2 = self._create_routing_object_from_points(rv_2, ro_2_members)
         self.parent_node.remove_routing_object(self.parent_routing_object)
@@ -325,14 +412,14 @@ class LeafNode(Node):
             self.mtree_objects = {key: val for key, val in self.mtree_objects.items() if val != value}
             self.update_radius()
 
-    def leafnode_values(self) -> Set[MtreeElement]:
+    def leafnode_values(self) -> Set[MTreeElement]:
         return self.values()
 
-    def values(self) -> Set[MtreeElement]:
-        return set([MtreeElement(x.identifier, x.value) for x in self.mtree_objects.values()])
+    def values(self) -> Set[MTreeElement]:
+        return set([MTreeElement(x.identifier, x.value) for x in self.mtree_objects.values()])
 
     def find_in_radius(self, value, radius) -> List[RangeElement]:
-        ranges = [RangeElement(MtreeElement(x.identifier, x.value), self.distance_measure(x.value, value)) for x in
+        ranges = [RangeElement(MTreeElement(x.identifier, x.value), self.distance_measure(x.value, value)) for x in
                   self.mtree_objects.values()]
         return [x for x in ranges if x.r <= radius]
 
@@ -340,7 +427,7 @@ class LeafNode(Node):
         for element in self.mtree_objects.values():
             distance = self.mtree_pointer.distance_measure(element.value, value)
             heapq.heappush(current_elements, HeapObject(distance,
-                                                        RangeElement(MtreeElement(element.identifier, element.value),
+                                                        RangeElement(MTreeElement(element.identifier, element.value),
                                                                      distance)).heap_object())
         return heap, current_elements
 
@@ -392,13 +479,13 @@ class RoutingObject:
             self.covering_tree = new_leafnode
             self.covering_tree.insert(mtree_object)
 
-    def leafnode_values(self) -> Set[MtreeElement]:
+    def leafnode_values(self) -> Set[MTreeElement]:
         if self.covering_tree:
             return self.covering_tree.leafnode_values()
         else:
             return set()
 
-    def values(self) -> Set[MtreeElement]:
+    def values(self) -> Set[MTreeElement]:
         if self.covering_tree is not None:
             return self.covering_tree.values()
         else:
@@ -473,7 +560,9 @@ class RoutingObject:
 
 
 class MTree:
-    def __init__(self, distance_measure, inner_node_capacity=20, leaf_node_capacity=20):
+    _supported_split_methods = {'random', 'min_sum_radii', 'max_distance'}
+
+    def __init__(self, distance_measure, inner_node_capacity=20, leaf_node_capacity=50, split_method='max_distance'):
         if inner_node_capacity < 2:
             raise ValueError(f'inner_node_capacity must be >=2, got {inner_node_capacity}')
         if leaf_node_capacity < 2:
@@ -482,7 +571,9 @@ class MTree:
         self.leaf_node_capacity = leaf_node_capacity
         self._root_node: Optional[Node] = None
         self.distance_measure = distance_measure
-        self.split_method = 'random'
+        self.split_method = split_method
+        if split_method not in self._supported_split_methods:
+            raise Exception(f'split method not supported, supported options are: {self._supported_split_methods}')
         self._leaf_nodes = set()
 
     def insert(self, identifier, obj):
@@ -499,7 +590,7 @@ class MTree:
             if identifier in leafnode.mtree_objects.keys():
                 leafnode.remove_by_id(identifier)
 
-    def values(self) -> Set[MtreeElement]:
+    def values(self) -> Set[MTreeElement]:
         if not self._root_node:
             return set()
         else:
