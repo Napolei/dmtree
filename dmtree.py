@@ -67,7 +67,7 @@ class HeapObject:
 
 class Node:
     def __init__(self, mtree_pointer):
-        self.mtree_pointer: MTree = mtree_pointer
+        self.mtree_pointer: DMTree = mtree_pointer
         self.distance_measure = mtree_pointer.distance_measure
         self.parent_routing_object: Optional[RoutingObject] = None
         self.parent_node: Optional[NonLeafNode] = None  # holder of parent_routing_object
@@ -559,7 +559,7 @@ class RoutingObject:
         return f'RoutingObject[value={self.routing_value}, covering_tree={self.covering_tree}]'
 
 
-class MTree:
+class DMTree:
     _supported_split_methods = {'random', 'min_sum_radii', 'max_distance'}
 
     def __init__(self, distance_measure, inner_node_capacity=20, leaf_node_capacity=50, split_method='max_distance'):
@@ -585,10 +585,10 @@ class MTree:
         else:
             self._root_node.insert(new_mtree_object)
 
-    def remove_by_id(self, identifier):
+    def remove(self, identifier):
         for leafnode in self._leaf_nodes:
             if identifier in leafnode.mtree_objects.keys():
-                leafnode.remove_by_id(identifier)
+                leafnode.remove(identifier)
 
     def values(self) -> Set[MTreeElement]:
         if not self._root_node:

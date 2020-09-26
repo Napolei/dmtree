@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from mtree import MTree, RangeElement, MTreeElement
+from dmtree import DMTree, RangeElement, MTreeElement
 
 
 def distance(p1, p2):
@@ -10,7 +10,7 @@ def distance(p1, p2):
 
 
 def create_empty_mtree():
-    return MTree(distance_measure=distance, leaf_node_capacity=10, inner_node_capacity=5)
+    return DMTree(distance_measure=distance, leaf_node_capacity=10, inner_node_capacity=5)
 
 
 def base_values():
@@ -40,16 +40,16 @@ class TestMTree:
         mtree = create_full_mtree()
 
         for value in base_values():
-            mtree.remove_by_id(value)
+            mtree.remove(value)
         assert len(mtree.values()) == 0
 
     def test_inner_node_capacity_greater_than_2(self):
         with pytest.raises(ValueError) as _:
-            MTree(distance_measure=None, inner_node_capacity=1)
+            DMTree(distance_measure=None, inner_node_capacity=1)
 
     def test_leaf_node_capacity_greater_than_2(self):
         with pytest.raises(ValueError) as _:
-            MTree(distance_measure=None, leaf_node_capacity=1)
+            DMTree(distance_measure=None, leaf_node_capacity=1)
 
     def test_knn_result_elements(self):
         mtree = create_full_mtree()
