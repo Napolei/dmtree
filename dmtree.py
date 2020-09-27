@@ -100,7 +100,7 @@ class Node:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def remove_by_id(self, identifier):
+    def remove(self, identifier):
         raise NotImplementedError()
 
 
@@ -208,9 +208,9 @@ class NonLeafNode(Node):
     def values(self) -> Set[MTreeElement]:
         return set().union(*([x.values() for x in self.routing_objects]))
 
-    def remove_by_id(self, identifier):
+    def remove(self, identifier):
         for ro in list(self.routing_objects):
-            ro.remove_by_id(identifier)
+            ro.remove(identifier)
 
     def find_in_radius(self, value, radius) -> Iterator[RangeElement]:
         return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
@@ -395,7 +395,7 @@ class LeafNode(Node):
         if self.is_full():
             self.split_and_promote()
 
-    def remove_by_id(self, identifier):
+    def remove(self, identifier):
         old_radius = self.radius
         self.mtree_objects.pop(identifier, None)
         if len(self.mtree_objects) == 0:
@@ -491,9 +491,9 @@ class RoutingObject:
         else:
             return set()
 
-    def remove_by_id(self, identifier):
+    def remove(self, identifier):
         if self.covering_tree is not None:
-            self.covering_tree.remove_by_id(identifier)
+            self.covering_tree.remove(identifier)
 
     def find_in_radius(self, value, radius) -> List[RangeElement]:
         # TODO optimize

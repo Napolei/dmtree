@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='downward-mtree',
-    version='1.0',
+    version='1.0.1',
     py_modules=["dmtree"],
     url='https://github.com/Napolei/dmtree',
     license='MIT License',
