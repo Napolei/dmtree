@@ -36,12 +36,28 @@ class TestMTree:
         mtree_values = [x.value for x in mtree.values()]
         assert set(mtree_values) == set(base_values())
 
-    def test_remove_by_id(self):
+    def test_batch_insert(self):
+        mtree = create_empty_mtree()
+        batch = [(x, x) for x in base_values()]
+        mtree.insert_batch(batch)
+        assert len(mtree.values()) == len(batch)
+
+    def test_remove(self):
         mtree = create_full_mtree()
 
         for value in base_values():
             mtree.remove(value)
         assert len(mtree.values()) == 0
+
+    def test_remove_batch(self):
+        mtree = create_full_mtree()
+        identifiers = set([x for x in base_values()[:100]])
+        assert len(identifiers) > 0
+        mtree.remove_batch(identifiers)
+        assert len(mtree.values()) == len(base_values()) - len(identifiers)
+        mtree_identifiers = set([x.identifier for x in mtree.values()])
+        for iden in identifiers:
+            assert iden not in mtree_identifiers
 
     def test_inner_node_capacity_greater_than_2(self):
         with pytest.raises(ValueError) as _:

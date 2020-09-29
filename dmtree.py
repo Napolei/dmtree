@@ -6,7 +6,7 @@ import math
 import operator
 import random
 from numbers import Number
-from typing import Optional, Set, Dict, List, Iterator, Tuple
+from typing import Optional, Set, Dict, List, Iterator, Tuple, Any
 
 
 class RangeElement:
@@ -407,6 +407,19 @@ class LeafNode(Node):
             if new_radius != old_radius:
                 self.parent_routing_object.update_radius()
 
+    def remove_batch(self, iterable: Set):
+        old_radius = self.radius
+        intersection = iterable.intersection(self.mtree_objects.keys())
+        did_remove_elements = True
+        for identifier in intersection:
+            self.mtree_objects.pop(identifier)
+            did_remove_elements = True
+        if did_remove_elements:
+            self.update_radius()
+            new_radius = self.radius
+            if new_radius != old_radius:
+                self.parent_routing_object.update_radius()
+
     def remove_by_value(self, value):
         if value in self.mtree_objects.values():
             self.mtree_objects = {key: val for key, val in self.mtree_objects.items() if val != value}
@@ -585,10 +598,18 @@ class DMTree:
         else:
             self._root_node.insert(new_mtree_object)
 
+    def insert_batch(self, iterable: (Any, Any)):
+        for identifier, value in sorted(iterable, key=lambda _: random.random()):
+            self.insert(identifier, value)
+
     def remove(self, identifier):
         for leafnode in self._leaf_nodes:
             if identifier in leafnode.mtree_objects.keys():
                 leafnode.remove(identifier)
+
+    def remove_batch(self, iterable):
+        for leafnode in self._leaf_nodes:
+            leafnode.remove_batch(set(iterable))
 
     def values(self) -> Set[MTreeElement]:
         if not self._root_node:
