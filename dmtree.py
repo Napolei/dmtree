@@ -69,8 +69,13 @@ class Node:
     def __init__(self, mtree_pointer):
         self.mtree_pointer: DMTree = mtree_pointer
         self.distance_measure = mtree_pointer.distance_measure
-        self.parent_routing_object: Optional[RoutingObject] = None
         self.parent_node: Optional[NonLeafNode] = None  # holder of parent_routing_object
+
+    def parent_routing_object(self):
+        if self.parent_node is not None:
+            candidates = [x for x in self.parent_node.routing_objects if x.covering_tree == self]
+            assert len(candidates) == 1
+            return candidates[0]
 
     def is_root(self):
         return self == self.mtree_pointer._root_node
@@ -188,8 +193,6 @@ class NonLeafNode(Node):
         covering_tree.parent_node = self
 
         new_ro = RoutingObject(rv, covering_radius, covering_tree, self, self.mtree_pointer)
-        ro_1.parent_routing_object = new_ro
-        ro_2.parent_routing_object = new_ro
         self.insert_routing_object(new_ro)
 
     def insert_routing_object(self, new_routing_object):
@@ -369,13 +372,15 @@ class LeafNode(Node):
         assert len(ro_1_members) + len(ro_2_members) == len(self.mtree_objects)
         ro_1 = self._create_routing_object_from_points(rv_1, ro_1_members)
         ro_2 = self._create_routing_object_from_points(rv_2, ro_2_members)
-        self.parent_node.remove_routing_object(self.parent_routing_object)
+        self.parent_node.remove_routing_object(self.parent_routing_object())
+        self.mtree_pointer._leaf_nodes.remove(self)
         self.parent_node.insert_routing_object(ro_1)
         self.parent_node.insert_routing_object(ro_2)
 
     def _create_routing_object_from_points(self, routing_value: LeafNodeElement, points: List[LeafNodeElement]):
 
         new_leaf_node = LeafNode(self.mtree_pointer)
+        new_leaf_node.parent_node = self.parent_node
 
         for element in points:
             new_leaf_node.insert(element)
@@ -383,8 +388,6 @@ class LeafNode(Node):
         new_routing_object = RoutingObject(routing_value, new_leaf_node.radius, new_leaf_node, self.parent_node,
                                            self.mtree_pointer)
 
-        new_leaf_node.parent_node = self.parent_node
-        new_leaf_node.parent_routing_object = new_routing_object
         return new_routing_object
 
     def insert(self, mtree_object: LeafNodeElement) -> None:
@@ -399,13 +402,14 @@ class LeafNode(Node):
         old_radius = self.radius
         self.mtree_objects.pop(identifier, None)
         if len(self.mtree_objects) == 0:
-            self.parent_routing_object.covering_tree = None
-            self.parent_routing_object.covering_radius = 0
+            pro = self.parent_routing_object()
+            pro.covering_tree = None
+            pro.covering_radius = 0
         else:
             self.update_radius()
             new_radius = self.radius
             if new_radius != old_radius:
-                self.parent_routing_object.update_radius()
+                self.parent_routing_object().update_radius()
 
     def remove_batch(self, iterable: Set):
         old_radius = self.radius
@@ -418,7 +422,7 @@ class LeafNode(Node):
             self.update_radius()
             new_radius = self.radius
             if new_radius != old_radius:
-                self.parent_routing_object.update_radius()
+                self.parent_routing_object().update_radius()
 
     def remove_by_value(self, value):
         if value in self.mtree_objects.values():
@@ -467,11 +471,12 @@ class RoutingObject:
 
     def update_radius(self):
         old_covering_radius = self.covering_radius
-        parent_routing_object = self.assigned_node.parent_routing_object
+        parent_routing_object = self.assigned_node.parent_routing_object()
         furthest_child = self.fn(self.routing_value.value)
         if furthest_child is None:
             self.covering_radius = 0
-            parent_routing_object.update_radius()
+            if parent_routing_object is not None:
+                parent_routing_object.update_radius()
         else:
             new_covering_radius = furthest_child.r
             if new_covering_radius < old_covering_radius:
@@ -487,7 +492,6 @@ class RoutingObject:
         else:
             # routing object only has a routing value, but no subtree yet
             new_leafnode = LeafNode(self.mtree_pointer)
-            new_leafnode.parent_routing_object = self
             new_leafnode.parent_node = self.assigned_node
             self.covering_tree = new_leafnode
             self.covering_tree.insert(mtree_object)
