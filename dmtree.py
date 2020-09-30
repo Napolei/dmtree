@@ -108,6 +108,10 @@ class Node:
     def remove(self, identifier):
         raise NotImplementedError()
 
+    @abc.abstractmethod
+    def height(self):
+        raise NotImplementedError()
+
 
 class NonLeafNode(Node):
     def __init__(self, mtree_pointer):
@@ -233,6 +237,12 @@ class NonLeafNode(Node):
             heapq.heappush(heap, new_heap_object)
         return heap, current_elements
 
+    def height(self):
+        candidates = [x.covering_tree for x in self.routing_objects if x.covering_tree is not None]
+        if len(candidates) == 0:
+            return 0
+        return max([x.height() for x in candidates]) + 1
+
     def __repr__(self):
         return f'NonLeafNode[routing_objects={self.routing_objects}]'
 
@@ -318,8 +328,11 @@ class LeafNode(Node):
         r_2 = math.inf
         children_1 = None
         children_2 = None
-        for ro_candidate_1 in members:
-            for ro_candidate_2 in members:
+        members_list = list(members)
+        for i in range(len(members_list)-1):
+            for j in range(i+1, len(members_list)):
+                ro_candidate_1 = members_list[i]
+                ro_candidate_2 = members_list[j]
                 if ro_candidate_1.identifier != ro_candidate_2.identifier:
                     temp_children_1 = []
                     temp_children_2 = []
@@ -453,6 +466,9 @@ class LeafNode(Node):
             distance = self.mtree_pointer.distance_measure(element.value, value)
             heapq.heappush(current_elements, HeapObject(-1 * distance, RangeElement(element, distance)).heap_object())
         return heap, current_elements
+
+    def height(self):
+        return 0
 
     def __repr__(self):
         return f'LeafNode[values={list(self.mtree_objects.values())}]'
@@ -591,10 +607,19 @@ class DMTree:
         self.split_method = split_method
         if split_method not in self._supported_split_methods:
             raise Exception(f'split method not supported, supported options are: {self._supported_split_methods}')
-        self._leaf_nodes = set()
+        self._leaf_nodes: Set[LeafNode] = set()
+
+    def contains(self, identifier):
+        for ln in self._leaf_nodes:
+            if identifier in ln.mtree_objects.keys():
+                return True
+        return False
 
     def insert(self, identifier, obj):
         new_mtree_object = LeafNodeElement(identifier, obj, math.inf, self)
+        if self.contains(identifier):
+            return
+
         if not self._root_node:
             # empty tree
             self._root_node = NonLeafNode(self)
@@ -603,7 +628,8 @@ class DMTree:
             self._root_node.insert(new_mtree_object)
 
     def insert_batch(self, iterable: (Any, Any)):
-        for identifier, value in sorted(iterable, key=lambda _: random.random()):
+        temp = [x for x in iterable if not self.contains(x[0])]
+        for identifier, value in sorted(temp, key=lambda _: random.random()):
             self.insert(identifier, value)
 
     def remove(self, identifier):
@@ -625,6 +651,12 @@ class DMTree:
         if not self._root_node:
             return []
         return sorted(self._root_node.find_in_radius(value, radius), key=lambda x: x.r)
+
+    def height(self):
+        if not self._root_node:
+            return 0
+        else:
+            return self._root_node.height()
 
     @staticmethod
     def _continue_knn_search(k: int, heap: heapq, current_elements: heapq):
