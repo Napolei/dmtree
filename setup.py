@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name='downward-mtree',
-    version='1.0.1',
+    version='1.0.2',
     py_modules=["dmtree"],
     url='https://github.com/Napolei/dmtree',
     license='MIT License',
