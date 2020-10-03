@@ -261,6 +261,9 @@ class LeafNode(Node):
             self.radius = max([x.distance_to_parent_routing_object for x in self.mtree_objects.values()])
 
     def is_full(self) -> bool:
+        # if the radius is 0, it means all objects are at the same position as the routing value, there is no split that will help us
+        if self.radius == 0:
+            return False
         return self.mtree_pointer.leaf_node_capacity < len(self.mtree_objects.keys())
 
     def _assign_points_to_nearest_routing_object(self, ro_1: LeafNodeElement, ro_2: LeafNodeElement,

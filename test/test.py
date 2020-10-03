@@ -97,3 +97,8 @@ class TestMTree:
         assert expected_element_2 in results
         unexpected_element_1 = RangeElement(MTreeElement(52, 50), 1.5)
         assert unexpected_element_1 not in results
+
+    def test_no_endless_loop_leafnode_elements_all_the_same(self):
+        mtree = create_empty_mtree()
+        for i in range(500):
+            mtree.insert(i, 42)
