@@ -130,6 +130,9 @@ class NonLeafNode(Node):
             # we are in the root node
             new_routing_object = RoutingObject(mtree_object, 0, None, self, self.mtree_pointer)
             self.insert_routing_object(new_routing_object)
+            mtree_object = LeafNodeElement(mtree_object.identifier, mtree_object.value,
+                                           self.mtree_pointer.distance_measure(mtree_object.value, mtree_object.value),
+                                           self.mtree_pointer)
             new_routing_object.insert(mtree_object)
         else:
             # insert it into the closest candidate
