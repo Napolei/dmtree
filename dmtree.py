@@ -74,7 +74,7 @@ class Node:
     def parent_routing_object(self):
         if self.parent_node is not None:
             candidates = [x for x in self.parent_node.routing_objects if x.covering_tree == self]
-            assert len(candidates) == 1
+            assert len(candidates) == 1, f'length was {len(candidates)}, should be 1 out of {len(self.parent_node.routing_objects)}'
             return candidates[0]
 
     def is_root(self):
@@ -97,7 +97,7 @@ class Node:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def find_in_radius(self, value, radius) -> List[RangeElement]:
+    def find_in_radius(self, value, radius, distance_to_parent) -> List[RangeElement]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -222,8 +222,8 @@ class NonLeafNode(Node):
         for ro in list(self.routing_objects):
             ro.remove(identifier)
 
-    def find_in_radius(self, value, radius) -> Iterator[RangeElement]:
-        return itertools.chain.from_iterable([x.find_in_radius(value, radius) for x in self.routing_objects])
+    def find_in_radius(self, value, radius, distance_to_parent) -> Iterator[RangeElement]:
+        return itertools.chain.from_iterable([x.find_in_radius(value, radius, None) for x in self.routing_objects])
 
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
         for ro in self.routing_objects:
@@ -265,7 +265,7 @@ class LeafNode(Node):
 
     def is_full(self) -> bool:
         # if the radius is 0, it means all objects are at the same position as the routing value, there is no split that will help us
-        if self.radius == 0:
+        if self.radius <= self.mtree_pointer._leaf_nodes_minimum_radius_for_split:
             return False
         return self.mtree_pointer.leaf_node_capacity < len(self.mtree_objects.keys())
 
@@ -335,8 +335,8 @@ class LeafNode(Node):
         children_1 = None
         children_2 = None
         members_list = list(members)
-        for i in range(len(members_list)-1):
-            for j in range(i+1, len(members_list)):
+        for i in range(len(members_list) - 1):
+            for j in range(i + 1, len(members_list)):
                 ro_candidate_1 = members_list[i]
                 ro_candidate_2 = members_list[j]
                 if ro_candidate_1.identifier != ro_candidate_2.identifier:
@@ -454,9 +454,16 @@ class LeafNode(Node):
     def values(self) -> Set[MTreeElement]:
         return set([MTreeElement(x.identifier, x.value) for x in self.mtree_objects.values()])
 
-    def find_in_radius(self, value, radius) -> List[RangeElement]:
+    def _is_candidate_search_in_radius(self, search_radius, distance_to_routing_object, element):
+        if search_radius < distance_to_routing_object:
+            return element.distance_to_parent_routing_object >= distance_to_routing_object - search_radius
+        return element.distance_to_parent_routing_object <= search_radius + distance_to_routing_object
+
+    def find_in_radius(self, value, radius, distance_to_parent) -> List[RangeElement]:
+        candidates = [x for x in self.mtree_objects.values() if
+                      self._is_candidate_search_in_radius(radius, distance_to_parent, x)]
         ranges = [RangeElement(MTreeElement(x.identifier, x.value), self.distance_measure(x.value, value)) for x in
-                  self.mtree_objects.values()]
+                  candidates]
         return [x for x in ranges if x.r <= radius]
 
     def knn(self, value, distance_to_value, k, heap: heapq, current_elements: heapq) -> (heapq, heapq):
@@ -534,7 +541,7 @@ class RoutingObject:
         if self.covering_tree is not None:
             self.covering_tree.remove(identifier)
 
-    def find_in_radius(self, value, radius) -> List[RangeElement]:
+    def find_in_radius(self, value, radius, distance_to_parent) -> List[RangeElement]:
         # TODO optimize
         distance_to_routing_object_value = self.mtree_pointer.distance_measure(value, self.routing_value.value)
 
@@ -544,7 +551,7 @@ class RoutingObject:
         if distance_to_routing_object_value > radius + self.covering_radius:  # no overlap
             return []
 
-        children_in_radius = self.covering_tree.find_in_radius(value, radius)
+        children_in_radius = self.covering_tree.find_in_radius(value, radius, distance_to_routing_object_value)
         return list(children_in_radius)
 
     def knn(self, value, _1, _2, heap: heapq, current_elements: heapq) -> (heapq, heapq):
@@ -606,6 +613,7 @@ class DMTree:
             raise ValueError(f'inner_node_capacity must be >=2, got {inner_node_capacity}')
         if leaf_node_capacity < 2:
             raise ValueError(f'leaf_node_capacity must be >=2, got {leaf_node_capacity}')
+        self._leaf_nodes_minimum_radius_for_split = 0.00001
         self.inner_node_capacity = inner_node_capacity
         self.leaf_node_capacity = leaf_node_capacity
         self._root_node: Optional[Node] = None
@@ -614,6 +622,7 @@ class DMTree:
         if split_method not in self._supported_split_methods:
             raise Exception(f'split method not supported, supported options are: {self._supported_split_methods}')
         self._leaf_nodes: Set[LeafNode] = set()
+        self._values = {}
 
     def contains(self, identifier):
         for ln in self._leaf_nodes:
@@ -626,6 +635,7 @@ class DMTree:
         if self.contains(identifier):
             return
 
+        self._values[identifier] = MTreeElement(identifier, obj)
         if not self._root_node:
             # empty tree
             self._root_node = NonLeafNode(self)
@@ -639,6 +649,7 @@ class DMTree:
             self.insert(identifier, value)
 
     def remove(self, identifier):
+        self._values.pop(identifier, None)
         for leafnode in self._leaf_nodes:
             if identifier in leafnode.mtree_objects.keys():
                 leafnode.remove(identifier)
@@ -648,15 +659,12 @@ class DMTree:
             leafnode.remove_batch(set(iterable))
 
     def values(self) -> Set[MTreeElement]:
-        if not self._root_node:
-            return set()
-        else:
-            return self._root_node.values()
+        return self._values.values()
 
     def find_in_radius(self, value, radius) -> List[RangeElement]:
         if not self._root_node:
             return []
-        return sorted(self._root_node.find_in_radius(value, radius), key=lambda x: x.r)
+        return sorted(self._root_node.find_in_radius(value, radius, math.inf), key=lambda x: x.r)
 
     def height(self):
         if not self._root_node:
