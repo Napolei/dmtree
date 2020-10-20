@@ -10,7 +10,7 @@ def distance(p1, p2):
 
 
 def create_empty_mtree():
-    return DMTree(distance_measure=distance, leaf_node_capacity=5, inner_node_capacity=3)
+    return DMTree(distance_measure=distance, leaf_node_capacity=5, inner_node_capacity=2, split_method='min_sum_radii')
 
 
 def base_values():
